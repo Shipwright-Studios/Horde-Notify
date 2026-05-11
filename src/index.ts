@@ -32,12 +32,23 @@ async function init(): Promise<void> {
   // Build email→userId cache from channel membership (handles Slack Connect users)
   await slack.init();
 
-  // Seed with current preflights so we don't spam on startup
-  try {
-    const existing = await horde.fetchPreflightJobs(20);
-    preflightHandler.seedJobs(existing);
-  } catch (err) {
-    console.error("Failed to seed preflights — starting with empty state:", err);
+  // Seed with current preflights so we don't spam on startup.
+  // Retry with backoff — if we give up, every existing preflight gets
+  // re-announced on the first poll, which is much worse than waiting for Horde.
+  let attempt = 0;
+  let delayMs = 5_000;
+  for (;;) {
+    try {
+      const existing = await horde.fetchPreflightJobs(20);
+      preflightHandler.seedJobs(existing);
+      console.log(`Seeded ${existing.length} existing preflights`);
+      return;
+    } catch (err) {
+      attempt++;
+      console.error(`Seed attempt ${attempt} failed, retrying in ${delayMs / 1000}s:`, err);
+      await new Promise((r) => setTimeout(r, delayMs));
+      delayMs = Math.min(delayMs * 2, 60_000);
+    }
   }
 }
 
